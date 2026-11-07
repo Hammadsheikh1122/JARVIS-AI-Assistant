@@ -6,55 +6,68 @@ from flask import Flask, render_template, request, jsonify
 app = Flask(__name__)
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/interactions"
-
 
 SYSTEM_INSTRUCTION = """
 You are JARVIS, an intelligent personal AI assistant.
 
-LANGUAGE RULES — FOLLOW STRICTLY:
-
-1. If the user speaks or writes in English, reply in natural English.
-
-2. If the user writes in Roman Urdu or Roman English,
-   reply in natural Pakistani Roman Urdu using ONLY English letters.
-
-3. Roman Urdu means Urdu spoken in Pakistan but written using
-   the English alphabet.
-
-4. NEVER write Urdu using Urdu script.
-
-5. NEVER write Hindi using Devanagari script.
-
-6. If the user says:
-   "Roman English mein baat karo"
-   or
-   "Roman Urdu mein baat karo"
-   you MUST reply in Pakistani Roman Urdu using English letters.
-
-7. Do not switch languages unnecessarily.
-
-8. If the user mixes English and Roman Urdu,
-   reply naturally in the same mixed style.
-
-9. Use simple, natural Pakistani expressions.
-   Examples:
-   "Ji sir, main aapki madad kar sakta hoon."
-   "Aap kya karna chahte hain?"
-   "Bilkul sir, main samajh gaya."
-
-10. Keep spoken answers clear, natural and easy to pronounce.
-
-PERSONALITY:
-- Your name is JARVIS.
-- Be intelligent, polite and helpful.
+LANGUAGE RULES:
+- English input: reply in natural English.
+- Roman Urdu input: reply in natural Pakistani Roman Urdu.
+- Use only English letters in the normal reply.
+- Never use Urdu or Devanagari script in the normal reply.
+- For mixed language, respond naturally in the same style.
+- Be polite, concise and helpful.
 - Address the user as sir when appropriate.
-- Give accurate answers.
-- Never pretend you completed an action that you did not perform.
+- Never pretend to complete an action you did not perform.
 - Ask for confirmation before sensitive actions.
-- Keep answers concise unless the user requests details.
 """
+
+VOICE_INSTRUCTION = """
+You are a speech text converter for JARVIS.
+
+Convert the supplied assistant response into text suitable for speech.
+
+Rules:
+1. If the response is English, keep it in natural English.
+2. If the response is Roman Urdu, convert the Urdu words into
+   natural Pakistani Urdu script.
+3. Keep English technical words and names in English where appropriate.
+4. Do not translate or change the meaning.
+5. Return only the converted speech text.
+"""
+
+def ask_gemini(message, instruction):
+    response = requests.post(
+        GEMINI_URL,
+        headers={
+            "Content-Type": "application/json",
+            "x-goog-api-key": GEMINI_API_KEY
+        },
+        json={
+            "model": "gemini-3.5-flash-lite",
+            "input": message,
+            "system_instruction": instruction,
+            "generation_config": {
+                "temperature": 0.3,
+                "max_output_tokens": 500
+            }
+        },
+        timeout=60
+    )
+
+    response.raise_for_status()
+    result = response.json()
+
+    answer = ""
+
+    for step in result.get("steps", []):
+        if step.get("type") == "model_output":
+            for part in step.get("content", []):
+                if part.get("type") == "text":
+                    answer += part.get("text", "")
+
+    return answer.strip()
 
 
 @app.route("/")
@@ -69,63 +82,30 @@ def chat():
         user_message = data.get("message", "").strip()
 
         if not user_message:
-            return jsonify({
-                "reply": "Please type a message."
-            })
+            return jsonify({"reply": "Please type a message."})
 
         if not GEMINI_API_KEY:
             return jsonify({
                 "reply": "Sir, Gemini API key is missing."
             }), 500
 
-        response = requests.post(
-            GEMINI_URL,
-            headers={
-                "Content-Type": "application/json",
-                "x-goog-api-key": GEMINI_API_KEY
-            },
-            json={
-                "model": "gemini-3.5-flash-lite",
-                "input": user_message,
-                "system_instruction": SYSTEM_INSTRUCTION,
-                "generation_config": {
-                    "temperature": 0.4,
-                    "max_output_tokens": 500
-                }
-            },
-            timeout=60
-        )
+        reply = ask_gemini(user_message, SYSTEM_INSTRUCTION)
 
-        if response.status_code != 200:
-            print(
-                "GEMINI ERROR:",
-                response.status_code,
-                response.text
-            )
-
+        if not reply:
             return jsonify({
-                "reply": "Sir, Gemini AI returned an error. Please try again."
+                "reply": "Sir, I received an empty response."
             }), 502
 
-        result = response.json()
-
-        answer = ""
-
-        for step in result.get("steps", []):
-            if step.get("type") == "model_output":
-                for part in step.get("content", []):
-                    if part.get("type") == "text":
-                        answer += part.get("text", "")
-
-        if not answer.strip():
-            print("GEMINI RESPONSE:", result)
-
-            return jsonify({
-                "reply": "Sir, I received an empty response. Please try again."
-            }), 502
+        # Generate a separate version for spoken output.
+        try:
+            speech = ask_gemini(reply, VOICE_INSTRUCTION)
+        except Exception as error:
+            print("VOICE TEXT ERROR:", repr(error))
+            speech = reply
 
         return jsonify({
-            "reply": answer.strip()
+            "reply": reply,
+            "speech": speech or reply
         })
 
     except requests.exceptions.Timeout:
@@ -135,7 +115,6 @@ def chat():
 
     except Exception as error:
         print("ERROR:", repr(error))
-
         return jsonify({
             "reply": "Sorry sir, something went wrong."
         }), 500
