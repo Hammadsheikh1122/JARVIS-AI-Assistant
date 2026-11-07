@@ -36,7 +36,7 @@ def chat():
                 "x-goog-api-key": GEMINI_API_KEY
             },
             json={
-                "model": "gemini-3.8-flash",
+                "model": "gemini-3.5-flash-lite",
                 "input": user_message,
                 "system_instruction": """
 You are JARVIS, a smart personal AI assistant.
