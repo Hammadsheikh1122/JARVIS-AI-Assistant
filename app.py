@@ -6,10 +6,8 @@ from flask import Flask, render_template, request, jsonify
 app = Flask(__name__)
 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-GEMINI_URL = (
-    "https://generativelanguage.googleapis.com/v1beta/"
-    "models/gemini-2.5-flash:generateContent"
-)
+
+GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/interactions"
 
 
 @app.route("/")
@@ -28,21 +26,8 @@ def chat():
 
         if not GEMINI_API_KEY:
             return jsonify({
-                "reply": "Sir, Gemini API key is missing. Please check Render settings."
+                "reply": "Sir, Gemini API key is missing."
             }), 500
-
-        prompt = f"""
-You are JARVIS, a smart personal AI assistant.
-
-Understand the user's language.
-Reply in the same language.
-If the user writes Roman Urdu, reply in Roman Urdu.
-If the user writes English, reply in English.
-Keep answers clear, helpful and concise.
-
-User: {user_message}
-JARVIS:
-"""
 
         response = requests.post(
             GEMINI_URL,
@@ -51,16 +36,22 @@ JARVIS:
                 "x-goog-api-key": GEMINI_API_KEY
             },
             json={
-                "contents": [
-                    {
-                        "parts": [
-                            {"text": prompt}
-                        ]
-                    }
-                ],
-                "generationConfig": {
+                "model": "gemini-3.8-flash",
+                "input": user_message,
+                "system_instruction": """
+You are JARVIS, a smart personal AI assistant.
+
+Understand the user's language.
+Reply in the same language.
+If the user writes Roman Urdu, reply in Roman Urdu.
+If the user writes English, reply in English.
+
+Be helpful, intelligent and conversational.
+Keep answers clear and concise.
+""",
+                "generation_config": {
                     "temperature": 0.7,
-                    "maxOutputTokens": 300
+                    "max_output_tokens": 500
                 }
             },
             timeout=60
@@ -70,20 +61,30 @@ JARVIS:
             print("GEMINI ERROR:", response.status_code, response.text)
 
             return jsonify({
-                "reply": "Sir, Gemini AI is temporarily unavailable. Please try again."
+                "reply": "Sir, Gemini AI returned an error. Please try again."
             }), 502
 
         result = response.json()
 
-        answer = (
-            result["candidates"][0]["content"]["parts"][0]["text"].strip()
-        )
+        answer = ""
 
-        return jsonify({"reply": answer})
+        for step in result.get("steps", []):
+            if step.get("type") == "model_output":
+                for part in step.get("content", []):
+                    if part.get("type") == "text":
+                        answer += part.get("text", "")
+
+        if not answer.strip():
+            print("GEMINI RESPONSE:", result)
+            return jsonify({
+                "reply": "Sir, I received an empty response. Please try again."
+            }), 502
+
+        return jsonify({"reply": answer.strip()})
 
     except requests.exceptions.Timeout:
         return jsonify({
-            "reply": "Sir, the AI is taking too long. Please try again."
+            "reply": "Sir, AI is taking too long. Please try again."
         }), 504
 
     except Exception as error:
